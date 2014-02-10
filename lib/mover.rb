@@ -3,7 +3,7 @@ require File.dirname(__FILE__) + '/mover/gems'
 $:.unshift File.dirname(__FILE__)
 
 module Mover
-  
+
   def self.included(base)
     unless base.included_modules.include?(InstanceMethods)
       base.extend ClassMethods
@@ -11,14 +11,14 @@ module Mover
       base.send :attr_accessor, :move_options
     end
   end
-  
+
   module ClassMethods
-    
+
     def after_move(*to_class, &block)
       @after_move ||= []
       @after_move << [ to_class, block ]
     end
-    
+
     def before_move(*to_class, &block)
       @before_move ||= []
       @before_move << [ to_class, block ]
@@ -26,12 +26,12 @@ module Mover
 
     def move_to(to_class, options={})
       from_class = self
-      
+
       # Conditions
       conditions = options[:conditions] || '1'
       conditions = self.sanitize_sql(conditions)
       where = "WHERE #{conditions}"
-      
+
       # Columns
       magic = options[:magic] || 'moved_at'
       from = {
@@ -43,7 +43,7 @@ module Mover
         :columns => to_class.column_names,
         :table => to_class.table_name
       }
-      
+
       # insert[column] = value
       insert = (from[:columns] & to[:columns]).inject({}) do |hash, column|
         if column == magic && !options[:migrate]
@@ -53,12 +53,12 @@ module Mover
         end
         hash
       end
-      
+
       # Magic column not in "from" table
       if to[:columns].include?(magic) && !from[:columns].include?(magic)
         insert[magic] = Time.now.utc
       end
-      
+
       # Quote everything
       insert = insert.inject({}) do |hash, (column, value)|
         if value.is_a?(::Time)
@@ -68,7 +68,7 @@ module Mover
         end
         hash
       end
-      
+
       # Callbacks
       collector = lambda do |(classes, block)|
         classes.collect! { |c| eval(c.to_s) }
@@ -76,7 +76,7 @@ module Mover
       end
       before = (@before_move || []).collect(&collector).compact
       after = (@after_move || []).collect(&collector).compact
-      
+
       # Instances
       instances =
         if options[:instance]
@@ -87,7 +87,7 @@ module Mover
           self.find(:all, :conditions => conditions)
         end
       options.delete(:instance)
-      
+
       # Callback executor
       exec_callbacks = lambda do |callbacks|
         callbacks.each do |block|
@@ -98,11 +98,17 @@ module Mover
           end
         end
       end
-      
+
       # Execute
       transaction do
         exec_callbacks.call before
-        
+
+        adapter_class = if connection.class.to_s.include?("ConnectionProxy")
+                         connection.try(:connection)
+                       else
+                         connection
+                       end.class.to_s
+
         if options[:quick]
           connection.execute(<<-SQL)
             INSERT INTO #{to[:database]}.#{to[:table]} (#{insert.keys.join(', ')})
@@ -110,7 +116,7 @@ module Mover
             FROM #{from[:table]}
             #{where}
           SQL
-        elsif !options[:generic] && connection.class.to_s.include?('Mysql')
+        elsif !options[:generic] && adapter_class.include?('Mysql')
           update = insert.collect do |column, value|
             if value.include?("'")
               "#{to[:table]}.#{column} = #{value}"
@@ -137,7 +143,7 @@ module Mover
               "t.#{column} = f.#{value}"
             end
           end
-          
+
           connection.execute(<<-SQL)
             UPDATE #{to[:table]}
               AS t
@@ -147,7 +153,7 @@ module Mover
               AND #{conditions}
             SET #{set.join(', ')}
           SQL
-      
+
           connection.execute(<<-SQL)
             INSERT INTO #{to[:table]} (#{insert.keys.join(', ')})
             SELECT #{select.join(', ')}
@@ -162,11 +168,11 @@ module Mover
             )
           SQL
         end
-        
+
         unless options[:copy]
           connection.execute("DELETE FROM #{from[:table]} #{where}")
         end
-        
+
         exec_callbacks.call after
       end
     end
@@ -180,9 +186,9 @@ module Mover
       id
     end
   end
-  
+
   module InstanceMethods
-    
+
     def move_to(to_class, options={})
       options[:conditions] = "#{self.class.table_name}.#{self.class.primary_key} = #{id}"
       options[:instance] = self
